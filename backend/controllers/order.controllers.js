@@ -12,7 +12,6 @@ export const createOrder = async (req, res, next) => {
       return next(new ApiError(400, "Products array required"));
     }
 
-    // Validate product items shape and quantities
     for (const p of products) {
       if (!p.productId) return next(new ApiError(400, "Each item needs productId"));
       if (typeof p.quantity !== "number" || p.quantity <= 0) return next(new ApiError(400, "Invalid quantity"));

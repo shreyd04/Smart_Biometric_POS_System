@@ -4,7 +4,7 @@ import ApiResponse from "../utility/ApiResponse.js";
 
 export const createProduct = async (req, res) => {
   try {
-    const { name, description, price, stock, category, sku, supplier } = req.body;
+    const { name,  price, stock, category, sku, supplier } = req.body;
     if (!name || price == null || stock == null || !sku) {
       throw new ApiError(400, "Name, price, stock, and SKU are required");
     }

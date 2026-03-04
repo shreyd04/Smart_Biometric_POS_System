@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { type } from "express/lib/response";
 const userSchema=new mongoose.Schema(
     {
         username:{
@@ -22,8 +23,8 @@ const userSchema=new mongoose.Schema(
         },
         role:{  
             type:String,
-            enum:["admin","cashier","manager"],
-            default:"cashier"
+            enum:["admin","customer","merchant"],
+            default:"admin"
         },
         wallet:{
             type:String,
@@ -33,6 +34,9 @@ const userSchema=new mongoose.Schema(
         refreshToken:{
             type:String,
             default:null
+        },
+        biometric_template_id:{
+            type:String
         }
     },
     {

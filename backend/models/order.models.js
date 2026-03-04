@@ -31,11 +31,11 @@ const orderSchema = new mongoose.Schema(
       default: "pending",
     },
     payment: {
-      provider: { type: String, default: null }, // stripe | razorpay
-      providerOrderId: { type: String, default: null }, // paymentIntent id or razorpay order id
-      providerTxId: { type: String, default: null }, // charge / payment id (from webhook)
+      provider: { type: String, default: null }, 
+      providerOrderId: { type: String, default: null },
+      providerTxId: { type: String, default: null }, 
       amount: { type: Number, default: 0 },
-      status: { type: String, default: "pending" }, // requires_payment | created | paid | failed
+      status: { type: String, default: "pending" }, 
       raw: { type: Object, default: {} },
     },
     paidAt: { type: Date, default: null },
@@ -46,6 +46,19 @@ const orderSchema = new mongoose.Schema(
       enum: ["pending", "synced", "failed"],
       default: "pending",
     },
+    fraud_score:{
+      type:Number,
+      default:0
+    },
+    risk_label:{
+      type:String,
+      enum:["Low","Medium","High"],
+      default:"Low"
+    },
+    biometric_confidence:{
+      type:Number,
+      required:true
+    }
   },
   {
     timestamps: true,
