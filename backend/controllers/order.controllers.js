@@ -1,57 +1,49 @@
+// backend/controllers/order.controllers.js
 import mongoose from "mongoose";
 import Order from "../models/order.model.js";
 import Product from "../models/product.model.js";
+import User from "../models/user.model.js"; // assuming
 import { evaluateTransaction } from "../services/evaluation.service.js";
-
-import ApiError from "../utility/ApiError.js";
-import ApiResponse from "../utility/ApiResponse.js";
-
 import { verifyBiometric } from "../services/biometric.service.js";
 import { predictFraud } from "../services/ml.service.js";
 import blockchainService from "../services/blockchain.service.js";
+import ApiError from "../utility/ApiError.js";
+import ApiResponse from "../utility/ApiResponse.js";
 
-
-// cosine similarity (reuse)
 const cosineSimilarity = (a, b) => {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) {
+    throw new ApiError(500, "Invalid biometric embeddings");
+  }
   let dot = 0, normA = 0, normB = 0;
-
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
     normA += a[i] * a[i];
     normB += b[i] * b[i];
   }
-
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 };
 
-
 export const createOrder = async (req, res, next) => {
-
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-
     const userId = req.user._id;
-
-    const { products } = req.body;
+    const { products, biometricImageBase64, biometricImagesBase64 } = req.body;
 
     if (!products || products.length === 0) {
       throw new ApiError(400, "Products required");
     }
+    if (!biometricImageBase64 && (!Array.isArray(biometricImagesBase64) || biometricImagesBase64.length === 0)) {
+      throw new ApiError(400, "Biometric image is required");
+    }
 
     let totalAmount = 0;
-
     const enrichedProducts = [];
 
     for (const item of products) {
-
       const product = await Product.findById(item.productId).session(session);
-
-      if (!product) {
-        throw new ApiError(404, "Product not found");
-      }
-
+      if (!product) throw new ApiError(404, "Product not found");
       if (product.stock < item.quantity) {
         throw new ApiError(400, "Insufficient stock");
       }
@@ -60,35 +52,33 @@ export const createOrder = async (req, res, next) => {
       await product.save({ session });
 
       totalAmount += product.price * item.quantity;
-
-      enrichedProducts.push({
-        productId: product._id,
-        quantity: item.quantity
-      });
+      enrichedProducts.push({ productId: product._id, quantity: item.quantity });
     }
 
-
-    const user = await User.findById(userId);
-
-    if (!user.isBiometricEnrolled) {
+    const user = await User.findById(userId).session(session);
+    if (!user || !user.isBiometricEnrolled) {
       throw new ApiError(400, "Biometric not enrolled");
     }
 
-    const bioRes = await verifyBiometric(userId);
+    // Biometric verification
+    const bioRes = await verifyBiometric({
+      userId,
+      imageBase64: biometricImageBase64,
+      imagesBase64: biometricImagesBase64
+    });
 
-    const score = cosineSimilarity(
-      user.biometric.embedding,
-      bioRes.features
-    );
+    const score = typeof bioRes.features !== "undefined"
+      ? cosineSimilarity(user.biometric.embedding, bioRes.features)
+      : bioRes.biometric_confidence;
 
     if (score < 0.75) {
       throw new ApiError(401, "Biometric verification failed");
     }
 
-
+    // Fraud scoring
     const fraudRes = await predictFraud({
       amount: totalAmount,
-      biometric_confidence: score
+      // TODO: include other features: time_diff, tx_count_24h, etc.
     });
 
     const { fraud_score, risk_label } = fraudRes;
@@ -101,41 +91,45 @@ export const createOrder = async (req, res, next) => {
       throw new ApiError(401, decision.reason);
     }
 
-    createdOrder.status = decision.status;
+    const [createdOrder] = await Order.create(
+      [{
+        userId,
+        products: enrichedProducts,
+        totalAmount,
+        fraud_score,
+        risk_label,
+        biometric_confidence: score,
+        status: decision.status || (risk_label === "High" ? "pending" : "completed")
+      }],
+      { session }
+    );
 
-    const order = await Order.create([{
-      userId,
-      products: enrichedProducts,
-      totalAmount,
-      fraud_score,
-      risk_label,
-      biometric_confidence: score,
-      status: risk_label === "High" ? "pending" : "completed"
-    }], { session });
-
-    const createdOrder = order[0];
-
-
-    await blockchainService.recordTransaction({
-      orderId: createdOrder._id,
-      userId,
-      amount: totalAmount,
-      biometric_hash: bioRes.hash,
-      fraud_score
-    });
+    // Blockchain integration (non‑blocking but fail‑visible)
+    try {
+      await blockchainService.recordTransactionOnLedger({
+        orderId: createdOrder._id,
+        userId,
+        amount: totalAmount,
+        biometric_hash: bioRes.hash,
+        fraud_score
+      });
+    } catch (bcErr) {
+      // Option A: mark order as pending_on_chain but still commit
+      createdOrder.status = "pending_on_chain";
+      await createdOrder.save({ session });
+      // log bcErr somewhere for async retry
+    }
 
     await session.commitTransaction();
     session.endSession();
 
-    return res.status(201).json(
-      new ApiResponse(201, "Order created", createdOrder)
-    );
+    return res
+      .status(201)
+      .json(new ApiResponse(201, "Order created", createdOrder));
 
   } catch (error) {
-
     await session.abortTransaction();
     session.endSession();
-
     next(error);
   }
 };

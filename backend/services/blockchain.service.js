@@ -20,10 +20,15 @@ async function registerUserOnLedger(userPayload) {
   return resp.data; // assume teammate returns JSON { ledgerId: '...', ... }
 }
 
+// Suggested wrapper in blockchain.service.js
 async function recordTransactionOnLedger(transactionPayload) {
   if (!BASE) throw new ApiError(500, "BLOCKCHAIN_HTTP_BASE not configured");
   const resp = await httpClient.post("/recordTransaction", transactionPayload);
-  return resp.data; // assume { txId: '...', status: 'success', ... }
+  const data = resp.data;
+  if (!data || !data.txId || !data.status) {
+    throw new ApiError(502, "Invalid ledger response");
+  }
+  return data; // { txId, status, blockHash, previousHash, ... }
 }
 
 async function getTransactionFromLedger(txId) {
