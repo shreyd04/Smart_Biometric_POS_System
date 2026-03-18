@@ -41,7 +41,17 @@ const userSchema=new mongoose.Schema(
         wallet_balance:{
             type:Number,
             default:0
+        },
+        biometric:{
+            emmbededing:[Number],
+            hash:String,
+             
+        },
+        isBiometricEnrolled:{
+            type:Boolean,
+            default:false
         }
+
     },
     {
         timestamps:true,

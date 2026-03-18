@@ -1,129 +1,244 @@
-import Order from "../models/order.models.js";
+import mongoose from "mongoose";
+import Order from "../models/order.model.js";
+import Product from "../models/product.model.js";
+import { evaluateTransaction } from "../services/evaluation.service.js";
+
 import ApiError from "../utility/ApiError.js";
 import ApiResponse from "../utility/ApiResponse.js";
-import {predict} from "../services/ml.service.js"
+
+import { verifyBiometric } from "../services/biometric.service.js";
+import { predictFraud } from "../services/ml.service.js";
+import blockchainService from "../services/blockchain.service.js";
+
+
+// cosine similarity (reuse)
+const cosineSimilarity = (a, b) => {
+  let dot = 0, normA = 0, normB = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+};
+
 
 export const createOrder = async (req, res, next) => {
+
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const userId = req.user && req.user._id;
-    if (!userId) return next(new ApiError(401, "Authentication required"));
+
+    const userId = req.user._id;
 
     const { products } = req.body;
-    if (!Array.isArray(products) || products.length === 0) {
-      return next(new ApiError(400, "Products array required"));
+
+    if (!products || products.length === 0) {
+      throw new ApiError(400, "Products required");
     }
 
-    for (const p of products) {
-      if (!p.productId) return next(new ApiError(400, "Each item needs productId"));
-      if (typeof p.quantity !== "number" || p.quantity <= 0) return next(new ApiError(400, "Invalid quantity"));
-    }
+    let totalAmount = 0;
 
-    
-    const session = await mongoose.startSession();
-    session.startTransaction();
-    try {
-      let totalAmount = 0;
-      const enriched = [];
+    const enrichedProducts = [];
 
-      for (const item of products) {
-        const prod = await products.findById(item.productId).session(session);
-        if (!prod) {
-          await session.abortTransaction();
-          return next(new ApiError(404, `Product ${item.productId} not found`));
-        }
-        if (prod.stock < item.quantity) {
-          await session.abortTransaction();
-          return next(new ApiError(400, `Insufficient stock for ${prod.name}`));
-        }
-        // decrement stock
-        prod.stock -= item.quantity;
-        await prod.save({ session });
+    for (const item of products) {
 
-        const lineTotal = prod.price * item.quantity;
-        totalAmount += lineTotal;
-        enriched.push({
-          productId: prod._id,
-          quantity: item.quantity,
-          price: prod.price,
-          name: prod.name
-        });
+      const product = await Product.findById(item.productId).session(session);
+
+      if (!product) {
+        throw new ApiError(404, "Product not found");
       }
 
-      const order = await Order.create([{
-        userId,
-        products: enriched.map(e => ({ productId: e.productId, quantity: e.quantity })),
-        totalAmount,
-        status: "pending"
-      }], { session });
+      if (product.stock < item.quantity) {
+        throw new ApiError(400, "Insufficient stock");
+      }
 
-      await session.commitTransaction();
-      session.endSession();
+      product.stock -= item.quantity;
+      await product.save({ session });
 
-      const createdOrder = await Order.findById(order[0]._id)
-        .populate({ path: "userId", select: "-password -refreshToken" })
-        .populate({ path: "products.productId" });
+      totalAmount += product.price * item.quantity;
 
-
-
-      return new ApiResponse(res, 201, "Order created successfully", { order: createdOrder });
-    } catch (errInner) {
-      await session.abortTransaction();
-      session.endSession();
-      return next(errInner);
+      enrichedProducts.push({
+        productId: product._id,
+        quantity: item.quantity
+      });
     }
+
+
+    const user = await User.findById(userId);
+
+    if (!user.isBiometricEnrolled) {
+      throw new ApiError(400, "Biometric not enrolled");
+    }
+
+    const bioRes = await verifyBiometric(userId);
+
+    const score = cosineSimilarity(
+      user.biometric.embedding,
+      bioRes.features
+    );
+
+    if (score < 0.75) {
+      throw new ApiError(401, "Biometric verification failed");
+    }
+
+
+    const fraudRes = await predictFraud({
+      amount: totalAmount,
+      biometric_confidence: score
+    });
+
+    const { fraud_score, risk_label } = fraudRes;
+    const decision = evaluateTransaction({
+      biometric_confidence: score,
+      fraud_score
+    });
+
+    if (!decision.allowed) {
+      throw new ApiError(401, decision.reason);
+    }
+
+    createdOrder.status = decision.status;
+
+    const order = await Order.create([{
+      userId,
+      products: enrichedProducts,
+      totalAmount,
+      fraud_score,
+      risk_label,
+      biometric_confidence: score,
+      status: risk_label === "High" ? "pending" : "completed"
+    }], { session });
+
+    const createdOrder = order[0];
+
+
+    await blockchainService.recordTransaction({
+      orderId: createdOrder._id,
+      userId,
+      amount: totalAmount,
+      biometric_hash: bioRes.hash,
+      fraud_score
+    });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(201).json(
+      new ApiResponse(201, "Order created", createdOrder)
+    );
+
   } catch (error) {
-    return next(new ApiError(500, error.message || "Order creation failed"));
+
+    await session.abortTransaction();
+    session.endSession();
+
+    next(error);
   }
 };
 
-export const getAllOrders = async (req, res) => {
+export const getAllOrders = async (req, res, next) => {
+
   try {
-    const orders = await Order.find().populate("userId", "-password -refreshToken").populate("products.productId");
-    return new ApiResponse(res, 200, "Orders retrieved successfully", { orders });
+
+    const orders = await Order.find()
+      .populate("userId", "-password")
+      .populate("products.productId");
+
+    return new ApiResponse(
+      res,
+      200,
+      "Orders fetched successfully",
+      { orders }
+    );
+
   } catch (error) {
-    throw new ApiError(500, "Error retrieving orders");
+    return next(new ApiError(500, "Error fetching orders"));
   }
 };
 
-export const getOrderById = async (req, res) => {
+
+
+export const getOrderById = async (req, res, next) => {
+
   try {
+
     const { id } = req.params;
-    const order = await Order.findById(id).populate("userId", "-password -refreshToken").populate("products.productId");
+
+    const order = await Order.findById(id)
+      .populate("userId", "-password")
+      .populate("products.productId");
+
     if (!order) {
       throw new ApiError(404, "Order not found");
-    }   
-    return new ApiResponse(res, 200, "Order retrieved successfully", { order });
+    }
+
+    return new ApiResponse(
+      res,
+      200,
+      "Order fetched successfully",
+      { order }
+    );
+
   } catch (error) {
-    throw new ApiError(500, "Error retrieving order");
+    return next(new ApiError(500, error.message));
   }
 };
 
-export const updateOrderById = async (req, res) => {
+
+
+export const updateOrderById = async (req, res, next) => {
+
   try {
+
     const { id } = req.params;
-    const updates = req.body;
-    const order = await Order.findByIdAndUpdate(id,
-        updates, { new: true, runValidators: true });   
+
+    const order = await Order.findByIdAndUpdate(
+      id,
+      req.body,
+      { new: true, runValidators: true }
+    );
+
     if (!order) {
       throw new ApiError(404, "Order not found");
     }
-    return new ApiResponse(res, 200, "Order updated successfully", { order });
+
+    return new ApiResponse(
+      res,
+      200,
+      "Order updated successfully",
+      { order }
+    );
+
   } catch (error) {
-    throw new ApiError(500, "Error updating order");
+    return next(new ApiError(500, error.message));
   }
 };
 
-export const deleteOrderById = async (req, res) => {    
-    try {
-        const { id } = req.params;
-        const order = await Order.findByIdAndDelete(id);    
-        if (!order) {
-            throw new ApiError(404, "Order not found");
-        }   
-        return new ApiResponse(res, 200, "Order deleted successfully");
-    }   
-    catch (error) {
-        throw new ApiError(500, "Error deleting order");
-    }
-};
 
+
+export const deleteOrderById = async (req, res, next) => {
+
+  try {
+
+    const { id } = req.params;
+
+    const order = await Order.findByIdAndDelete(id);
+
+    if (!order) {
+      throw new ApiError(404, "Order not found");
+    }
+
+    return new ApiResponse(
+      res,
+      200,
+      "Order deleted successfully"
+    );
+
+  } catch (error) {
+    return next(new ApiError(500, error.message));
+  }
+};
