@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { type } from "express/lib/response";
+
 const userSchema=new mongoose.Schema(
     {
         username:{
@@ -41,7 +41,17 @@ const userSchema=new mongoose.Schema(
         wallet_balance:{
             type:Number,
             default:0
+        },
+        biometric:{
+            embedding:[Number],
+            hash:String,
+             
+        },
+        isBiometricEnrolled:{
+            type:Boolean,
+            default:false
         }
+
     },
     {
         timestamps:true,

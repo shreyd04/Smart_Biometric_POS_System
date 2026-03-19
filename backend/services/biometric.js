@@ -1,0 +1,1 @@
+export { verifyBiometric } from "./biometric.service.js";
