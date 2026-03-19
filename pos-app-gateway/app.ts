@@ -16,12 +16,9 @@ export interface PaymentResponse {
 }
 
 const CHANNEL_NAME = "mychannel";
-// Make sure to deploy the chaincode with this name.
+
 const CHAINCODE_NAME = "palmpos";
 
-// These can be overridden in production via environment variables.
-// Defaults are resolved relative to this project, not the current working directory,
-// so running from any folder is consistent.
 const ORG2_WALLET_PATH =
   process.env.FABRIC_WALLET_PATH ||
   path.resolve(__dirname, "..", "wallets", "org2");
