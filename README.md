@@ -32,3 +32,7 @@ This repository contains a Smart Biometric POS System built on **Hyperledger Fab
 
 After moving folders (see the migration instructions you used), update any scripts or service env vars to match your local paths and credentials.
 
+## User Interface 
+<img width="911" height="579" alt="Screenshot 2026-05-12 at 2 13 14 AM" src="https://github.com/user-attachments/assets/f2731fa9-7741-49f1-ac3d-59c8a68487e5" />
+
+
