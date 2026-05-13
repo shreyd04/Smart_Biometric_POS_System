@@ -848,8 +848,10 @@ This project is licensed under the **Apache License 2.0**. See [LICENSE](./LICEN
 - All contributors and testers who made this possible
 
 ---
-
-**Last Updated:** May 13, 2026  
 **Version:** 2.0.0  
 **Status:** Production Ready (v2.0 GA Release)
+
+<img width="911" height="579" alt="Screenshot 2026-05-12 at 2 13 14 AM" src="https://github.com/user-attachments/assets/8e08a97d-6405-4d28-a1e8-2485b9197976" />
+
+
 
